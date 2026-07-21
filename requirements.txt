@@ -1,0 +1,10 @@
+requests
+fastapi
+uvicorn[standard]
+websockets
+httpx
+# Official iX-Systems TrueNAS WebSocket JSON-RPC client (handles WS connect,
+# ping/reconnect, SCRAM/PLAIN API-key auth, job polling, legacy DDP fallback).
+# Pinned to a TrueNAS major; truenas_client.py lazy-imports it so the spoke
+# imports cleanly even before dep_guard installs it.
+truenas-api-client @ git+https://github.com/truenas/api_client.git@master
