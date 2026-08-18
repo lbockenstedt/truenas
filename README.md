@@ -20,18 +20,18 @@ Installers are idempotent — re-running one updates code and preserves credenti
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/lbockenstedt/truenas/main/install_truenas.sh \
-  | sudo bash -s -- --hub lm-hub.lrbtechnologies.com
+  | sudo bash -s -- --hub lm-hub.lrbtechnologies.com --secret <spoke-secret>
 ```
 
 | Flag | Purpose |
 | :--- | :--- |
 | `--hub URL` | Hub WebSocket URL. A bare host is fine — `lm-hub.example.com` becomes `wss://lm-hub.example.com:443`, `host:port` gets a `wss://` prefix, and an explicit `ws://`/`wss://` is left alone. Omit it to auto-discover the hub (DNS `lm-hub.<suffix>`, then mDNS `_lm-hub._tcp.local.`). |
 | `--id`, `--name` | Pin the spoke id. Omitted, the id derives from the hostname, so a renamed clone reconnects under its new name. |
-| `--secret` | Pre-shared spoke secret. |
+| `--secret` | Required pre-shared spoke secret. You may pass it here or set `SPOKE_SECRET`; startup fails closed if neither is present. |
 | `--hub-secret` | Hub PSK for auto-approval. Without it the spoke lands in *pending approval* in the WebUI. |
 | `--all-prereqs` | Accepted and ignored — kept so the hub's install-module call doesn't abort. |
 
-**Environment overrides:** `HUB_URL` (same normalization as `--hub`), `SPOKE_ID`.
+**Environment overrides:** `HUB_URL` (same normalization as `--hub`), `SPOKE_ID`, `SPOKE_SECRET` (required unless `--secret` is passed).
 <!-- INSTALLERS:END -->
 
 ## Layout
@@ -74,7 +74,7 @@ Read: `TRUENAS_LIST_APPLIANCES`, `TRUENAS_PROBE`, `TRUENAS_GET_POOLS`,
 ## Install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/lbockenstedt/truenas/main/install_truenas.sh | bash -s -- --hub <hub> --id truenas-<host>
+curl -sSL https://raw.githubusercontent.com/lbockenstedt/truenas/main/install_truenas.sh | bash -s -- --hub <hub> --id truenas-<host> --secret <spoke-secret>
 ```
 
 Or load the `truenas` role on a generic agent (WebUI Setup → Agents → Load

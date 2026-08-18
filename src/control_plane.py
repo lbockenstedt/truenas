@@ -175,14 +175,17 @@ class TruenasControlPlane(BaseControlPlane):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--id", required=True, help="Spoke ID")
-    parser.add_argument("--secret", nargs='?', const="lm-secret", default="lm-secret",
-                        help="Authentication secret (default: lm-secret)")
+    parser.add_argument("--secret", default=None,
+                        help="Authentication secret (required; or set SPOKE_SECRET)")
     parser.add_argument("--hub-secret", nargs='?', default="", const="",
                         help="Hub authentication secret for mutual auth")
     parser.add_argument("--hub", required=True, help="Hub WebSocket URL")
     args = parser.parse_args()
+    secret = args.secret or _os.getenv("SPOKE_SECRET")
+    if not secret:
+        parser.error("authentication secret required: pass --secret or set SPOKE_SECRET")
 
-    cp = TruenasControlPlane(args.id, args.secret, args.hub_secret, args.hub)
+    cp = TruenasControlPlane(args.id, secret, args.hub_secret, args.hub)
     try:
         asyncio.run(cp.run_hub_mode())
     except KeyboardInterrupt:
