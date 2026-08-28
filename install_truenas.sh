@@ -1,4 +1,14 @@
 #!/bin/bash
+
+# Resolve the branch this checkout is deployed on so a dev/qa host is not
+# hard-reset back onto main by an installer re-run. Detached HEAD (or any git
+# failure) falls back to main.
+_deployed_branch() {
+  local b
+  b=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  case "$b" in ""|HEAD) echo main ;; *) echo "$b" ;; esac
+}
+
 set -e
 
 # Default Configuration
@@ -124,14 +134,14 @@ if [ -d "truenas" ]; then
     echo "📂 TrueNAS directory exists. Preparing for update..."
     SPOKE_PATH="$INSTALL_DIR/truenas"
     cd "$SPOKE_PATH"
-    git fetch origin -q && git reset --hard origin/main   # hard-sync
+    BR=$(_deployed_branch) && git fetch origin -q "$BR" && git reset --hard "origin/$BR"   # hard-sync
     cd "$INSTALL_DIR"
 elif [ -d ".git" ]; then
-    git fetch origin -q && git reset --hard origin/main
+    BR=$(_deployed_branch) && git fetch origin -q "$BR" && git reset --hard "origin/$BR"
     SPOKE_PATH="$(pwd)"
 else
     echo "🌐 Cloning TrueNAS Manager repository..."
-    git clone https://github.com/lbockenstedt/truenas.git
+    git clone --branch "${TRUENAS_BRANCH:-main}" https://github.com/lbockenstedt/truenas.git
     SPOKE_PATH="$INSTALL_DIR/truenas"
 fi
 
