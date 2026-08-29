@@ -6,3 +6,15 @@ __pycache__/
 cache/
 *.tmp
 .DS_Store
+
+# mTLS material and runtime secrets issued by the hub — never commit these
+certs/
+.env.lock
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+keys.json
+hub_secret.json
+secrets.json
