@@ -52,7 +52,7 @@ The `truenas` module bridges the LM Hub control plane and multiple independent T
 - **SMB & NFS File Sharing:** Enumerate active file exports, provision new SMB shares with guest/ACL configurations, and manage NFS exports.
 - **Snapshot & Replication Visibility:** Inspect periodic snapshot schedules, query existing ZFS snapshots, and trigger manual snapshots on demand.
 - **Physical Disk Telemetry:** Polls disk health, serial numbers, drive models, temperature readings, rotation speeds, and enclosure slot positions.
-- **Alerts & Services:** Captures active TrueNAS system alerts and queries system service run-states (SMB, NFS, SSH, iSCSI, WebDAV).
+- **Alerts & Services:** Captures active TrueNAS system alerts and queries system service run-states (SMB, NFS, SSH).
 
 ---
 
@@ -86,6 +86,7 @@ The spoke handles the following commands dispatched from the LM Hub via `src/tru
 
 The `truenas` module can be installed as a dedicated systemd service or loaded dynamically as an agent role.
 
+<!-- INSTALLERS:START -->
 ### 1. Standalone Spoke Installation (`install_truenas.sh`)
 
 Run on the spoke host or container:
@@ -97,11 +98,14 @@ curl -sSL https://raw.githubusercontent.com/lbockenstedt/truenas/main/install_tr
 
 | Flag | Description |
 | :--- | :--- |
-| `--hub URL` | LM Hub WebSocket endpoint (`wss://<host>:443`). Bare hostnames are automatically normalized. |
+| `--hub URL` | LM Hub WebSocket endpoint (`wss://<host>:443`). Bare hostnames are automatically normalized. Defaults to `auto` discovery. |
 | `--id`, `--name` | Unique spoke identifier (defaults to `truenas-<hostname>`). |
-| `--secret` | Pre-shared key for authenticating the spoke with the LM Hub. |
+| `--secret` | Pre-shared key for authenticating the spoke with the LM Hub. Required for authenticated connection. |
 | `--hub-secret` | Hub PSK enabling automatic spoke approval. |
-| `--all-prereqs` | Installs system dependencies and python virtual environment. |
+| `--all-prereqs` | Accepted and ignored. |
+
+Environment variable overrides (`HUB_URL`, `SPOKE_ID`, `SPOKE_SECRET`, `HUB_SECRET`) are also supported.
+<!-- INSTALLERS:END -->
 
 ### 2. TrueNAS Appliance Credentials
 
