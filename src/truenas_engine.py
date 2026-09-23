@@ -24,6 +24,7 @@ _SENSITIVE = ("api_key", "password", "secret")
 
 
 def _err(message: str, data: Any = None) -> Dict[str, Any]:
+    """Construct standardized ERROR status response envelope."""
     return {"status": "ERROR", "data": data if data is not None else [],
             "message": message}
 
@@ -32,6 +33,7 @@ class TruenasEngine:
     """Core interaction layer for the managed TrueNAS appliance fleet."""
 
     def __init__(self, appliances: Optional[List[Dict[str, Any]]] = None):
+        """Initialize TruenasEngine with optional initial appliance fleet."""
         self.appliances: List[Dict[str, Any]] = list(appliances or [])
         # The shared tenant id (set via UPDATE_CONFIG from the hub) — an
         # appliance whose ``tenant_id`` equals this is visible to ALL tenants
@@ -43,6 +45,7 @@ class TruenasEngine:
 
     def set_appliances(self, appliances: List[Dict[str, Any]],
                       shared_tenant_id: str = "") -> None:
+        """Update the appliance fleet and reconcile active client connections."""
         self.appliances = list(appliances or [])
         self.shared_tenant_id = shared_tenant_id or ""
         # Drop clients for appliances no longer in the fleet; keep the rest so
@@ -77,6 +80,7 @@ class TruenasEngine:
 
     def _get_appliance(self, appliance_id: str,
                        tenant: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Locate appliance configuration by ID with optional tenant matching."""
         for a in self.appliances:
             if a.get("id") == appliance_id and self._tenant_matches(a, tenant):
                 return a
@@ -167,6 +171,7 @@ class TruenasEngine:
         rows = []
 
         async def _probe_row(a: Dict[str, Any]):
+            """Probe single appliance reachability and return structured status row."""
             aid = a.get("id", "")
             host = a.get("host") or a.get("address") or ""
             rcell = {"reachable": None, "latency_ms": None}
@@ -208,6 +213,7 @@ class TruenasEngine:
     # ── per-appliance read passthroughs ─────────────────────────────────────
     async def probe(self, appliance_id: str,
                     tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Probe appliance reachability and system information."""
         a, client = self._client_for(appliance_id, tenant)
         if not a:
             return _err(f"Appliance {appliance_id} not found")
@@ -222,6 +228,7 @@ class TruenasEngine:
     async def _read(self, method_name: str, appliance_id: str,
                     tenant: Optional[str] = None, *, client_fn=None,
                     noun: str = "row(s)") -> Dict[str, Any]:
+        """Execute a read command against a target appliance client."""
         a, client = self._client_for(appliance_id, tenant)
         if not a:
             return _err(f"Appliance {appliance_id} not found")
@@ -235,18 +242,22 @@ class TruenasEngine:
 
     async def get_pools(self, appliance_id: str,
                         tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch ZFS storage pools from the target appliance."""
         return await self._read("pools", appliance_id, tenant, noun="pool(s)")
 
     async def get_datasets(self, appliance_id: str,
                            tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch ZFS datasets from the target appliance."""
         return await self._read("datasets", appliance_id, tenant, noun="dataset(s)")
 
     async def get_disks(self, appliance_id: str,
                         tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch physical disk inventory from the target appliance."""
         return await self._read("disks", appliance_id, tenant, noun="disk(s)")
 
     async def get_shares(self, appliance_id: str, kind: str = "smb",
                          tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch file sharing configurations from the target appliance."""
         a, client = self._client_for(appliance_id, tenant)
         if not a:
             return _err(f"Appliance {appliance_id} not found")
@@ -259,20 +270,24 @@ class TruenasEngine:
 
     async def get_alerts(self, appliance_id: str,
                          tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch active system alerts and warnings from the target appliance."""
         return await self._read("alerts", appliance_id, tenant, noun="alert(s)")
 
     async def get_services(self, appliance_id: str,
                            tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch system services and operational states from the target appliance."""
         return await self._read("services", appliance_id, tenant, noun="service(s)")
 
     async def get_capacity(self, appliance_id: str,
                            tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Calculate storage capacity and allocation metrics across pools."""
         return await self._read("capacity", appliance_id, tenant, noun="pool(s)")
 
     # ── write methods (management) ──────────────────────────────────────────
     async def create_dataset(self, appliance_id: str, pool: str, name: str,
                              options: Optional[Dict[str, Any]] = None,
                              tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new ZFS dataset within a pool on the target appliance."""
         a, client = self._client_for(appliance_id, tenant)
         if not a:
             return _err(f"Appliance {appliance_id} not found")
@@ -287,6 +302,7 @@ class TruenasEngine:
     async def delete_dataset(self, appliance_id: str, dataset_id: str,
                              options: Optional[Dict[str, Any]] = None,
                              tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Delete an existing ZFS dataset on the target appliance."""
         a, client = self._client_for(appliance_id, tenant)
         if not a:
             return _err(f"Appliance {appliance_id} not found")
@@ -301,6 +317,7 @@ class TruenasEngine:
     async def create_share(self, appliance_id: str, kind: str, dataset: str,
                            options: Optional[Dict[str, Any]] = None,
                            tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Create a file share (SMB/NFS) for a dataset on the target appliance."""
         a, client = self._client_for(appliance_id, tenant)
         if not a:
             return _err(f"Appliance {appliance_id} not found")
@@ -316,6 +333,7 @@ class TruenasEngine:
                               name: str = "",
                               options: Optional[Dict[str, Any]] = None,
                               tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Take a manual ZFS snapshot of a dataset on the target appliance."""
         a, client = self._client_for(appliance_id, tenant)
         if not a:
             return _err(f"Appliance {appliance_id} not found")
@@ -330,6 +348,7 @@ class TruenasEngine:
 
     async def run_scrub(self, appliance_id: str, pool_id: str,
                         tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Initiate a ZFS pool scrub operation on the target appliance."""
         a, client = self._client_for(appliance_id, tenant)
         if not a:
             return _err(f"Appliance {appliance_id} not found")
@@ -357,7 +376,12 @@ class TruenasEngine:
         errors: List[str] = []
 
         async def _safe(coro, label, default):
-            r = await coro
+            """Execute a query coroutine with error trapping and default fallback."""
+            try:
+                r = await coro
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{label}: {e}")
+                return default
             self._log_datum(label, host, r)
             if r.get("status") in ("SUCCESS", "PARTIAL"):
                 return r.get("data")
