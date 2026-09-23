@@ -36,9 +36,9 @@ The `truenas` module operates as an independent spoke communicating with TrueNAS
 - **ZFS Storage Pool Telemetry:** Discovers and monitors ZFS pools, healthy/degraded vdev topology, scrubbing status, and allocation percentages.
 - **Dataset Lifecycle & Quotas:** Enumerates ZFS datasets, mounts, compression types, and provisions new datasets with quota configuration.
 - **File Sharing Management:** Inspects and configures SMB and NFS network file shares, mapping datasets to access permissions and export options.
-- **Replication & Snapshot Inspection:** Reads periodic snapshot tasks, replication states, and provides manual snapshot triggering (`TRUENAS_CREATE_SNAPSHOT`).
+- **Snapshot Inspection:** Inspects periodic snapshot tasks and provides manual snapshot triggering (`TRUENAS_CREATE_SNAPSHOT`).
 - **Disk Inventory & SMART Metrics:** Polls physical drive models, serial numbers, temperature, rotation speeds, and enclosure slot mapping.
-- **System Services & Alerts:** Monitors core services (SMB, NFS, SSH, iSCSI) and gathers active hardware/system alerts.
+- **System Services & Alerts:** Monitors core services (SMB, NFS, SSH) and gathers active hardware/system alerts.
 
 ---
 
@@ -53,7 +53,7 @@ The `truenas` module operates as an independent spoke communicating with TrueNAS
 | `TRUENAS_GET_POOLS` | Read | Queries active ZFS storage pools (`pool.query`). |
 | `TRUENAS_GET_DATASETS` | Read | Enumerates ZFS datasets and properties (`pool.dataset.query`). |
 | `TRUENAS_GET_DISKS` | Read | Queries physical disks and SMART parameters (`disk.query`). |
-| `TRUENAS_GET_SHARES` | Read | Queries SMB, NFS, or iSCSI shares (`sharing.smb.query`, `sharing.nfs.query`). |
+| `TRUENAS_GET_SHARES` | Read | Queries SMB or NFS shares (`sharing.smb.query`, `sharing.nfs.query`). |
 | `TRUENAS_GET_ALERTS` | Read | Gathers active system alerts (`alert.list`). |
 | `TRUENAS_GET_SERVICES` | Read | Queries system services and run states (`service.query`). |
 | `TRUENAS_GET_CAPACITY` | Read | Calculates pool capacity, allocation, and free space. |

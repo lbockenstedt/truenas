@@ -377,7 +377,11 @@ class TruenasEngine:
 
         async def _safe(coro, label, default):
             """Execute a query coroutine with error trapping and default fallback."""
-            r = await coro
+            try:
+                r = await coro
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{label}: {e}")
+                return default
             self._log_datum(label, host, r)
             if r.get("status") in ("SUCCESS", "PARTIAL"):
                 return r.get("data")
