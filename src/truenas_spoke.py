@@ -26,6 +26,7 @@ class TruenasSpoke(BaseSpoke):
     UPDATE_CONFIG stores the fleet + _log_result INFO/ERROR).
     """
     def __init__(self, spoke_id: str, config: Dict[str, Any]):
+        """Initialize TruenasSpoke instance and configure engine fleet."""
         # The engine needs the fleet before super().__init__ so any base-class
         # background worker sees it. The hub pushes appliances via UPDATE_CONFIG
         # after approval; at cold start config may carry appliances from a
@@ -40,6 +41,7 @@ class TruenasSpoke(BaseSpoke):
     # ── Logging helper: mask sensitive fields in any command data ───────────
     @staticmethod
     def _mask(data: Any) -> Any:
+        """Return a copy of data with sensitive credential fields masked."""
         if not isinstance(data, dict):
             return data
         return {k: ("********" if k in _SENSITIVE else v) for k, v in data.items()}
@@ -89,6 +91,7 @@ class TruenasSpoke(BaseSpoke):
 
     async def _dispatch_command(self, normalized_cmd: str, command_type: str,
                                 data: Dict[str, Any]) -> Dict[str, Any]:
+        """Route normalized hub command to the corresponding TruenasEngine method."""
         # ── Lifecycle / config ──────────────────────────────────────────────
         if normalized_cmd == "UPDATE_CONFIG":
             appliances = (data or {}).get("appliances", []) if isinstance(data, dict) else []
