@@ -380,6 +380,7 @@ class TruenasEngine:
             try:
                 r = await coro
             except Exception as e:  # noqa: BLE001
+                self._log_datum(label, host, _err(str(e)))
                 errors.append(f"{label}: {e}")
                 return default
             self._log_datum(label, host, r)
