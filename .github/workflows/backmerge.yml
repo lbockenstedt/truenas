@@ -151,7 +151,7 @@ jobs:
             printf '`%s` would re-promote the unfixed code and the same defect would be\n' "$TGT"
             printf 'found again next cycle.\n\n'
             printf 'Carries **code only** -- every tracked `VERSION` file is pinned to\n'
-            printf '`%s`'"'"'s own sequence, so `%s`'"'"'s version does not leak backwards.\n\n' "$TGT" "$SRC"
+            printf '`%s`'\''s own sequence, so `%s`'\''s version does not leak backwards.\n\n' "$TGT" "$SRC"
             printf 'This PR merges itself once its required checks pass. If it cannot\n'
             printf '(a conflict, or a failing check) it stays open for a human -- nothing\n'
             printf 'is force-resolved and nothing is pushed to `%s` directly.\n' "$TGT"
