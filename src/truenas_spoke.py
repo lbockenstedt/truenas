@@ -1,7 +1,14 @@
+"""TrueNAS spoke: turns hub TRUENAS_* commands into engine calls.
+
+Holds the appliance fleet pushed by the hub, masks credentials in logs and
+logs every command's outcome.
+"""
+# Standard library imports.
 import logging
 from pathlib import Path
 from typing import Dict, Any
 
+# Base spoke (core package or flat layout) and the TrueNAS engine.
 try:
     from core.src.base_spoke import BaseSpoke
 except ImportError:
@@ -33,17 +40,21 @@ class TruenasSpoke(BaseSpoke):
         # pre-provisioned config.
         appliances = (config or {}).get("appliances", []) if isinstance(config, dict) else []
         self.engine = TruenasEngine(appliances)
+        # Use the shared tenant id if the config has one.
         shared_tid = (config or {}).get("shared_tenant_id", "") if isinstance(config, dict) else ""
         if shared_tid:
             self.engine.shared_tenant_id = shared_tid
+        # Finish base spoke setup.
         super().__init__(spoke_id, config)
 
     # ── Logging helper: mask sensitive fields in any command data ───────────
     @staticmethod
     def _mask(data: Any) -> Any:
         """Return a copy of data with sensitive credential fields masked."""
+        # Leave non-dict values unchanged.
         if not isinstance(data, dict):
             return data
+        # Replace sensitive values with a fixed mask.
         return {k: ("********" if k in _SENSITIVE else v) for k, v in data.items()}
 
     async def handle_command(self, command_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -62,9 +73,11 @@ class TruenasSpoke(BaseSpoke):
         ``TRUENAS_CREATE_SHARE``, ``TRUENAS_CREATE_SNAPSHOT``,
         ``TRUENAS_RUN_SCRUB``. Unknown commands return an ERROR envelope.
         """
+        # Normalize the command name and log it with credentials masked.
         normalized_cmd = (command_type or "").upper()
         log_data = self._mask(data)
         logger.info(f"Handling Truenas Command: {command_type} with data {log_data}")
+        # Dispatch, log the outcome and return the result.
         res = await self._dispatch_command(normalized_cmd, command_type, data)
         self._log_result(command_type, res)
         return res
@@ -76,9 +89,11 @@ class TruenasSpoke(BaseSpoke):
         Error Log tab (same precedent as the nw spoke). ``errors`` (from
         TRUENAS_POLL) is surfaced as a sub-error count. Best-effort."""
         try:
+            # Read status, message and any per-part errors.
             status = str((res or {}).get("status", "")).upper()
             msg = (res or {}).get("message", "")
             errors = (res or {}).get("errors") or []
+            # Errors log as ERROR; everything else as INFO.
             if status == "ERROR" or errors:
                 logger.error("truenas command %s result: error — %s%s", command_type,
                              msg or "failed",
@@ -86,6 +101,7 @@ class TruenasSpoke(BaseSpoke):
             else:
                 logger.info("truenas command %s result: %s", command_type,
                             status.lower() or "ok")
+        # Logging itself failed: note it at debug level.
         except Exception:
             logger.debug("truenas log_result failed", exc_info=True)
 
@@ -94,21 +110,26 @@ class TruenasSpoke(BaseSpoke):
         """Route normalized hub command to the corresponding TruenasEngine method."""
         # ── Lifecycle / config ──────────────────────────────────────────────
         if normalized_cmd == "UPDATE_CONFIG":
+            # Read the new fleet and shared tenant id.
             appliances = (data or {}).get("appliances", []) if isinstance(data, dict) else []
             shared_tid = (data or {}).get("shared_tenant_id", "") if isinstance(data, dict) else ""
+            # Log the fleet with credentials masked.
             summary = [{k: ("********" if k in _SENSITIVE else v)
                         for k, v in a.items()} for a in appliances] \
                 if isinstance(appliances, list) else []
             logger.info(f"Updating truenas fleet configuration: "
                         f"{len(appliances if isinstance(appliances, list) else [])} "
                         f"appliance(s) -> {summary}")
+            # Store the config and update the engine's fleet.
             self.config = data or {}
             self.engine.set_appliances(appliances if isinstance(appliances, list) else [],
                                        shared_tenant_id=shared_tid)
+            # Confirm with the new appliance count.
             return {"status": "SUCCESS",
                     "message": "truenas configuration updated from Hub",
                     "appliance_count": len(self.engine.appliances)}
 
+        # Version query.
         if normalized_cmd in ("GET_VERSION", "GET-VERSION"):
             return {"status": "SUCCESS", "version": self.get_version()}
 
@@ -118,10 +139,12 @@ class TruenasSpoke(BaseSpoke):
             return await self.engine.list_appliances(tenant)
 
         # ── Per-appliance (data carries appliance_id) ───────────────────────
+        # Common fields: appliance id (or device_id) and tenant.
         d = data or {} if isinstance(data, dict) else {}
         appliance_id = d.get("appliance_id") or d.get("device_id") or ""
         tenant = d.get("tenant")
 
+        # Read commands.
         if normalized_cmd == "TRUENAS_PROBE":
             return await self.engine.probe(appliance_id, tenant)
 
@@ -135,6 +158,7 @@ class TruenasSpoke(BaseSpoke):
             return await self.engine.get_disks(appliance_id, tenant)
 
         if normalized_cmd == "TRUENAS_GET_SHARES":
+            # Share type defaults to SMB.
             kind = d.get("kind") or "smb"
             return await self.engine.get_shares(appliance_id, kind, tenant)
 
@@ -151,6 +175,7 @@ class TruenasSpoke(BaseSpoke):
             return await self.engine.poll(appliance_id, tenant)
 
         # ── Write / management ─────────────────────────────────────────────
+        # Write commands, with fallbacks for alternative field names.
         if normalized_cmd == "TRUENAS_CREATE_DATASET":
             return await self.engine.create_dataset(
                 appliance_id, d.get("pool", ""), d.get("name", ""),
@@ -197,6 +222,7 @@ class TruenasSpoke(BaseSpoke):
         the nw/opnsense spokes.
         """
         try:
+            # Read VERSION from the repo root; log and return "unknown" on failure.
             return (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
         except Exception:
             logger.exception("Failed to read VERSION file")
