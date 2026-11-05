@@ -14,6 +14,7 @@ flag) and never logged. ``upsert()`` sentinel-merges the key, so a partial edit
 """
 from __future__ import annotations
 
+# Standard library imports.
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("TruenasCredentials")
 
+# Store directory, overridable through the environment.
 _DIR = os.getenv("LM_TRUENAS_CREDS_DIR", "/etc/lm-truenas/credentials")
 
 # Auth mechanisms the official truenas_api_client supports for an API key.
@@ -37,21 +39,27 @@ _SECRET_FIELDS = ("api_key",)
 def _safe_tenant(tenant_id: str) -> str:
     """Sanitise a tenant id into a filename component — defends the store dir
     against path traversal from an unexpected id. Empty → 'default'."""
+    # Replace unsafe characters; an empty result becomes "default".
     t = re.sub(r"[^A-Za-z0-9._-]", "_", str(tenant_id or "").strip())
     return t or "default"
 
 
 def _store_path(tenant_id: str) -> str:
+    """Return the JSON file path for a tenant."""
     return os.path.join(_DIR, f"{_safe_tenant(tenant_id)}.json")
 
 
 def _load(tenant_id: str) -> List[Dict[str, Any]]:
+    """Load a tenant's credential list; a missing or unreadable file gives []."""
+    # Read the file and accept only a list.
     try:
         with open(_store_path(tenant_id), encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
+    # No file yet.
     except FileNotFoundError:
         return []
+    # Corrupt file: warn and start empty.
     except Exception as exc:  # noqa: BLE001 — corrupt store → start empty, don't crash
         logger.warning("truenas credentials: could not read %s: %s",
                        _store_path(tenant_id), exc)
@@ -59,11 +67,14 @@ def _load(tenant_id: str) -> List[Dict[str, Any]]:
 
 
 def _save(tenant_id: str, creds: List[Dict[str, Any]]) -> None:
+    """Write a tenant's credentials atomically with owner-only permissions."""
+    # Create the directory and restrict it to the owner.
     os.makedirs(_DIR, exist_ok=True)
     try:
         os.chmod(_DIR, 0o700)
     except OSError:
         pass
+    # Write to a 0600 temp file, then swap it into place.
     path = _store_path(tenant_id)
     tmp = path + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -74,6 +85,7 @@ def _save(tenant_id: str, creds: List[Dict[str, Any]]) -> None:
 
 
 def _normalize_mechanism(raw: Any) -> str:
+    """Return a supported auth mechanism, defaulting to "auto"."""
     m = str(raw or "auto").strip()
     return m if m in _AUTH_MECHANISMS else "auto"
 
@@ -81,6 +93,7 @@ def _normalize_mechanism(raw: Any) -> str:
 def list_public(tenant_id: str) -> List[Dict[str, Any]]:
     """This tenant's credentials WITHOUT secret values — safe for the browser.
     Each: {name, host, verify_ssl, auth_mechanism, secrets_set {api_key: bool}}."""
+    # Copy each credential without its API key, noting only whether one is set.
     out: List[Dict[str, Any]] = []
     for c in _load(tenant_id):
         out.append({
@@ -90,10 +103,12 @@ def list_public(tenant_id: str) -> List[Dict[str, Any]]:
             "auth_mechanism": c.get("auth_mechanism", "auto"),
             "secrets_set": {"api_key": bool(c.get("api_key"))},
         })
+    # Sort by host, then name.
     return sorted(out, key=lambda e: (e.get("host") or "", e.get("name") or ""))
 
 
 def get(tenant_id: str, name: str) -> Optional[Dict[str, Any]]:
+    """Return a tenant's credential by name, or None."""
     for c in _load(tenant_id):
         if c.get("name") == name:
             return c
@@ -105,15 +120,18 @@ def upsert(tenant_id: str, name: str, host: str, api_key: str,
     """Add or update one of this tenant's named TrueNAS credentials. Sentinel-
     merge: an empty/absent ``api_key`` KEEPS the stored key (so a partial edit
     that re-saves host/verify_ssl doesn't wipe the key)."""
+    # Name and host are required.
     name = (name or "").strip()
     host = (host or "").strip()
     if not name:
         raise ValueError("credential name is required")
     if not host:
         raise ValueError("credential host is required")
+    # Load existing entries and find one with this name.
     mech = _normalize_mechanism(auth_mechanism)
     creds = _load(tenant_id)
     existing = next((c for c in creds if c.get("name") == name), None)
+    # Keep the stored key when none is given; a key is required in the end.
     merged_api_key = api_key
     if (merged_api_key in (None, "")) and existing:
         merged_api_key = existing.get("api_key", "")  # keep stored key
@@ -125,6 +143,7 @@ def upsert(tenant_id: str, name: str, host: str, api_key: str,
     merged_mech = mech
     if mech == "auto" and existing and existing.get("auth_mechanism") in ("PLAIN", "SCRAM"):
         merged_mech = existing["auth_mechanism"]
+    # Build the new entry.
     entry = {
         "name": name,
         "host": host,
@@ -132,16 +151,21 @@ def upsert(tenant_id: str, name: str, host: str, api_key: str,
         "verify_ssl": bool(verify_ssl),
         "auth_mechanism": merged_mech,
     }
+    # Replace any old entry with the same name and save.
     creds = [c for c in creds if c.get("name") != name]
     creds.append(entry)
     _save(tenant_id, creds)
 
 
 def delete(tenant_id: str, name: str) -> bool:
+    """Remove a tenant's credential by name; True if one was removed."""
+    # Keep everything except the named entry.
     creds = _load(tenant_id)
     kept = [c for c in creds if c.get("name") != name]
+    # Nothing removed: report False.
     if len(kept) == len(creds):
         return False
+    # Save the shorter list.
     _save(tenant_id, kept)
     return True
 
@@ -150,9 +174,11 @@ def materialize(tenant_id: str, name: str) -> Dict[str, Any]:
     """Turn one of this tenant's stored credentials into the kwargs the
     TrueNASClient needs: {host, api_key, verify_ssl, auth_mechanism}. Raises
     KeyError if the name is unknown for this tenant."""
+    # Look up the credential; an unknown name raises KeyError.
     c = get(tenant_id, name)
     if not c:
         raise KeyError(f"no TrueNAS credential named {name!r} for tenant {tenant_id!r}")
+    # Return only what the client needs.
     return {
         "host": c.get("host", ""),
         "api_key": c.get("api_key", ""),
