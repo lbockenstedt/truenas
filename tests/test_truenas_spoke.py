@@ -422,3 +422,11 @@ def test_credentials_upsert_requires_key_first_time(tmp_path, monkeypatch):
         credentials.upsert("acme", "nas2", host="10.0.0.5", api_key="")
     with _pytest.raises(ValueError):
         credentials.upsert("acme", "nas2", host="", api_key="k")
+
+def test_build_uri_adds_the_api_path_and_keeps_explicit_ones():
+    from truenas_client import _build_uri
+    assert _build_uri("172.21.0.5") == "wss://172.21.0.5/api/current"
+    assert _build_uri("nas.example:8443") == "wss://nas.example:8443/api/current"
+    assert _build_uri("127.0.0.1") == "ws://127.0.0.1/api/current"
+    assert _build_uri("wss://nas/api/v25.04.0") == "wss://nas/api/v25.04.0"
+    assert _build_uri("") == ""

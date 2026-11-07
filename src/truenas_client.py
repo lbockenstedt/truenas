@@ -41,19 +41,22 @@ def _build_uri(host: str) -> str:
     """Build the WS JSON-RPC URI. Force ``wss://`` for any non-loopback host
     (API keys auto-revoke over plain ws://). A loopback/``localhost`` host is
     allowed plain (a same-box dev/test appliance). The official client appends
-    the API path itself from its ``Client(uri=...)`` constructor, so we pass
-    just the scheme+host[+port]."""
-    # Empty host means no URI; full ws/wss URIs pass through unchanged.
+    the JSON-RPC endpoint is ``/api/current``: a bare host makes the appliance
+    answer the websocket handshake with a redirect to ``/ui/`` ("Invalid
+    redirect target"), so the path is added whenever the host carries none."""
+    # Empty host means no URI.
     h = (host or "").strip()
     if not h:
         return ""
-    if h.startswith(("ws://", "wss://")):
-        return h
     # Loopback hosts may use plain ws://; everything else uses wss://.
     low = h.lower()
-    if low in ("127.0.0.1", "localhost", "::1") or low.startswith("127."):
-        return f"ws://{h}"
-    return f"wss://{h}"
+    if not h.startswith(("ws://", "wss://")):
+        loop = low in ("127.0.0.1", "localhost", "::1") or low.startswith("127.")
+        h = f"{'ws' if loop else 'wss'}://{h}"
+    # A URI that already names a path is used as given.
+    if "/" not in h.split("://", 1)[1]:
+        h += "/api/current"
+    return h
 
 
 def _is_scale(system_info: Dict[str, Any]) -> bool:
