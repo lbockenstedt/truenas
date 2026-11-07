@@ -245,6 +245,17 @@ def test_read_commands_emit_methods(monkeypatch):
         client.calls.clear()
 
 
+def test_fleet_listing_surfaces_hardware_serial(monkeypatch):
+    info = {"system_serial": "2M292101K3", "system_product": "ProLiant DL380",
+            "version": "TrueNAS-13", "hostname": "x", "uptime": 5}
+    spoke = _make_spoke([{"id": "a1", "name": "TNAS", "host": "10.0.0.5", "api_key": "k"}],
+                        monkeypatch, canned={"system.info": info})
+    res = _run(spoke.handle_command("TRUENAS_LIST_APPLIANCES", {}))
+    row = res["data"][0]
+    assert row["info"] == {"system_serial": "2M292101K3", "system_product": "ProLiant DL380",
+                           "version": "TrueNAS-13"}
+
+
 def test_get_shares_passes_kind(monkeypatch):
     spoke = _make_spoke([
         {"id": "a1", "host": "10.0.0.5", "api_key": "k", "tenant_id": "acme"}],
