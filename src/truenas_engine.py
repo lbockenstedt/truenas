@@ -31,6 +31,16 @@ def _err(message: str, data: Any = None) -> Dict[str, Any]:
             "message": message}
 
 
+def _hw_identity(data: Any) -> Dict[str, Any]:
+    """The system.info fields that identify the physical machine and its
+    product, for the fleet listing (the hub stitches the serial to the iLO)."""
+    if not isinstance(data, dict):
+        return {}
+    keys = ("system_serial", "system_product", "system_manufacturer", "version",
+            "product_name")
+    return {k: data[k] for k in keys if data.get(k)}
+
+
 class TruenasEngine:
     """Core interaction layer for the managed TrueNAS appliance fleet."""
 
@@ -197,6 +207,8 @@ class TruenasEngine:
             aid = a.get("id", "")
             host = a.get("host") or a.get("address") or ""
             rcell = {"reachable": None, "latency_ms": None}
+            # Hardware identity from the same probe (serial links the box to its iLO).
+            info: Dict[str, Any] = {}
             # With a client, time a system info call (6 s limit).
             _, client = self._client_for(aid, tenant)
             if client is not None:
@@ -208,6 +220,7 @@ class TruenasEngine:
                     if pr.get("status") == "SUCCESS":
                         rcell = {"reachable": True,
                                  "latency_ms": int((time.monotonic() - t0) * 1000)}
+                        info = _hw_identity(pr.get("data"))
                     # Error reply: unreachable.
                     else:
                         logger.warning("truenas probe %s during fleet list: %s",
@@ -226,6 +239,7 @@ class TruenasEngine:
                 "verify_ssl": bool(a.get("verify_ssl", True)),
                 "reachable": rcell.get("reachable"),
                 "latency_ms": rcell.get("latency_ms"),
+                "info": info,
                 "tenant_id": a.get("tenant_id", ""),
                 "shared": bool(self.shared_tenant_id
                                and a.get("tenant_id", "") == self.shared_tenant_id),
