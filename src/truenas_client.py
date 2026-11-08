@@ -85,6 +85,7 @@ class TrueNASClient:
         self.host = (cred or {}).get("host", "")
         self.api_key = (cred or {}).get("api_key", "")
         # User the API key belongs to (required by TrueNAS 25.04+ key login).
+        self._username_set = bool((cred or {}).get("username"))
         self.username = (cred or {}).get("username") or "truenas_admin"
         self.verify_ssl = bool((cred or {}).get("verify_ssl", True))
         mech = (cred or {}).get("auth_mechanism", "auto")
@@ -129,16 +130,23 @@ class TrueNASClient:
         """API-key login. SCRAM/PLAIN are honoured as chosen; "auto" tries SCRAM
         (TrueNAS 26+) and falls back to PLAIN (Core / 24.x / 25.x)."""
         from truenas_api_client.auth_api_key import APIKeyAuthMech  # type: ignore
-        if self.auth_mechanism == "PLAIN":
-            c.login_with_api_key(self.username, self.api_key, APIKeyAuthMech.PLAIN)
-            return
+        if self.auth_mechanism != "PLAIN":
+            try:
+                c.login_with_api_key(self.username, self.api_key, APIKeyAuthMech.SCRAM)
+                return
+            except Exception as e:  # noqa: BLE001
+                if self.auth_mechanism == "SCRAM":
+                    raise
+                logger.info("truenas %s SCRAM login failed (%s); trying PLAIN", self.host, e)
         try:
-            c.login_with_api_key(self.username, self.api_key, APIKeyAuthMech.SCRAM)
-        except Exception as e:  # noqa: BLE001
-            if self.auth_mechanism == "SCRAM":
-                raise
-            logger.info("truenas %s SCRAM login failed (%s); trying PLAIN", self.host, e)
             c.login_with_api_key(self.username, self.api_key, APIKeyAuthMech.PLAIN)
+        except Exception:
+            # No user configured: the default may not own the key, so use the
+            # key-only login (TrueNAS < 26 finds the owner from the key itself).
+            if self._username_set:
+                raise
+            if not c.call("auth.login_with_api_key", self.api_key):
+                raise ValueError("Invalid API key")
 
     async def _ensure(self) -> bool:
         """Connect if not connected. Returns False + sets _connect_error on
