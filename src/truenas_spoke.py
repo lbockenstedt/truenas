@@ -180,11 +180,15 @@ class TruenasSpoke(BaseSpoke):
     @staticmethod
     def _mask(data: Any) -> Any:
         """Return a copy of data with sensitive credential fields masked."""
-        # Leave non-dict values unchanged.
+        # Recurse into lists (e.g. UPDATE_CONFIG's appliances[]).
+        if isinstance(data, list):
+            return [TruenasSpoke._mask(v) for v in data]
+        # Leave other non-dict values unchanged.
         if not isinstance(data, dict):
             return data
-        # Replace sensitive values with a fixed mask.
-        return {k: ("********" if k in _SENSITIVE else v) for k, v in data.items()}
+        # Replace sensitive values with a fixed mask, recursing into nested values.
+        return {k: ("********" if k in _SENSITIVE else TruenasSpoke._mask(v))
+                for k, v in data.items()}
 
     async def handle_command(self, command_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Dispatch a hub TRUENAS_* command to the engine.

@@ -530,3 +530,9 @@ def test_auto_login_without_user_falls_back_to_key_only(monkeypatch):
     fake = _LoginClient(scram_ok=False)
     cl._login(fake)
     assert fake.logins[-1] == ("auth.login_with_api_key", "k")
+
+
+def test_mask_hides_nested_appliance_api_key():
+    import truenas_spoke
+    out = truenas_spoke.TruenasSpoke._mask({"appliances": [{"host": "h", "api_key": "secret"}]})
+    assert out == {"appliances": [{"host": "h", "api_key": "********"}]}
