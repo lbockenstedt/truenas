@@ -145,6 +145,8 @@ class TrueNASClient:
         # Connect in a worker thread; on failure record the error and return False.
         try:
             await asyncio.to_thread(self._connect_sync)
+            logger.info("truenas connect %s ok (%s, auth=%s, verify_ssl=%s)",
+                        self.host, self.uri, self.auth_mechanism, self.verify_ssl)
             return True
         except Exception as e:  # noqa: BLE001
             self._connect_error = str(e)
