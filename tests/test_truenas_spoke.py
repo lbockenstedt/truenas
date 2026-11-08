@@ -536,3 +536,31 @@ def test_mask_hides_nested_appliance_api_key():
     import truenas_spoke
     out = truenas_spoke.TruenasSpoke._mask({"appliances": [{"host": "h", "api_key": "secret"}]})
     assert out == {"appliances": [{"host": "h", "api_key": "********"}]}
+
+
+def test_call_reconnects_after_dropped_socket():
+    import errno
+    import asyncio
+    import truenas_client
+
+    class Dead:
+        def call(self, method, *a, **k):
+            raise truenas_client_exc("Unexpected closure of remote connection", errno.ECONNABORTED)
+
+    class Live:
+        def call(self, method, *a, **k):
+            return [{"name": "tank"}]
+
+    class truenas_client_exc(Exception):
+        def __init__(self, msg, no):
+            super().__init__(msg)
+            self.errno = no
+
+    cl = truenas_client.TrueNASClient({"host": "h", "api_key": "k"})
+    cl._client, cl._connected = Dead(), True
+
+    def reconnect():
+        cl._client, cl._connected = Live(), True
+    cl._connect_sync = reconnect
+    env = asyncio.run(cl._call("pool.query"))
+    assert env["status"] == "SUCCESS" and env["data"] == [{"name": "tank"}]
