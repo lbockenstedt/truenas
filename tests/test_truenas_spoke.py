@@ -497,6 +497,12 @@ class _LoginClient:
         self.logins.append((username, api_key, mech.value))
         if mech.value == "SCRAM" and not self.scram_ok:
             raise ValueError("SCRAM not supported")
+        if username == "truenas_admin" and mech.value == "PLAIN" and not self.scram_ok:
+            raise ValueError("Invalid API key")
+
+    def call(self, method, *args):
+        self.logins.append((method, *args))
+        return True
 
 
 def test_auto_login_falls_back_to_plain_with_username(monkeypatch):
@@ -515,3 +521,12 @@ def test_plain_login_defaults_username(monkeypatch):
     fake = _LoginClient(scram_ok=True)
     cl._login(fake)
     assert fake.logins == [("truenas_admin", "k", "PLAIN")]
+
+
+def test_auto_login_without_user_falls_back_to_key_only(monkeypatch):
+    import truenas_client
+    _stub_auth_mech(monkeypatch)
+    cl = truenas_client.TrueNASClient({"host": "h", "api_key": "k"})
+    fake = _LoginClient(scram_ok=False)
+    cl._login(fake)
+    assert fake.logins[-1] == ("auth.login_with_api_key", "k")
