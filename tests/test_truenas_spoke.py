@@ -441,3 +441,35 @@ def test_build_uri_adds_the_api_path_and_keeps_explicit_ones():
     assert _build_uri("127.0.0.1") == "ws://127.0.0.1/api/current"
     assert _build_uri("wss://nas/api/v25.04.0") == "wss://nas/api/v25.04.0"
     assert _build_uri("") == ""
+
+
+# ── role-hosted auto-poll pushes through the control-plane back-ref ──────────
+def test_poll_and_push_uses_control_plane(monkeypatch):
+    spoke = _make_spoke([
+        {"id": "a1", "host": "10.0.0.5", "api_key": "k", "tenant_id": "acme"}],
+        monkeypatch, canned={"pool.query": [{"name": "tank"}]})
+    sent = []
+
+    class _CP:
+        _hub_ws = object()
+
+        async def send_to_hub(self, msg_type, data):
+            sent.append((msg_type, data))
+
+    spoke.control_plane = _CP()
+    _run(spoke._truenas_poll_and_push("a1"))
+    assert sent and sent[0][0] == "TRUENAS_POLL_RESULT"
+    assert sent[0][1]["appliance_id"] == "a1"
+    assert sent[0][1]["data"]["pools"][0]["name"] == "tank"
+
+
+def test_start_background_loops_is_idempotent(monkeypatch):
+    spoke = _make_spoke([], monkeypatch)
+
+    async def _go():
+        spoke.start_background_loops()
+        first = list(spoke._bg_tasks)
+        spoke.start_background_loops()
+        assert spoke._bg_tasks == first and len(first) == 1
+        first[0].cancel()
+    _run(_go())
