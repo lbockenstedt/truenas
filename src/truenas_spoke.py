@@ -163,7 +163,8 @@ class TruenasSpoke(BaseSpoke):
             return
         # Send the result to the hub.
         await cp.send_to_hub("TRUENAS_POLL_RESULT",
-                               {"appliance_id": appliance_id, "data": data})
+                               {"appliance_id": appliance_id, "data": data,
+                                "errors": res.get("errors") or []})
         logger.info("truenas auto-poll %s -> pushed (status=%s)",
                     appliance_id, res.get("status"))
 
