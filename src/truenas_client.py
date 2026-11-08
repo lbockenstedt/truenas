@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import logging
+import threading
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("TruenasClient")
@@ -78,6 +79,16 @@ def _is_disconnect(e: Exception) -> bool:
             or isinstance(e, ConnectionError)
             or "closure of remote connection" in str(e)
             or "socket is already closed" in str(e).lower())
+
+
+def _parsed(prop: Any) -> Optional[float]:
+    """Numeric value of a ZFS property ({parsed, rawvalue, value}) or a bare number."""
+    if isinstance(prop, dict):
+        prop = prop.get("parsed", prop.get("rawvalue"))
+    try:
+        return float(prop) if prop is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 class TrueNASClient:
@@ -187,6 +198,11 @@ class TrueNASClient:
     async def _call(self, method: str, *args, **kwargs) -> Dict[str, Any]:
         """Async wrapper: ensure connected, run the blocking call off the loop.
         Returns a standard envelope (never raises)."""
+        return await self._run(method, self._call_sync, method, *args, **kwargs)
+
+    async def _run(self, label: str, fn, *args, **kwargs) -> Dict[str, Any]:
+        """Run blocking ``fn`` on the connected client off the loop, reconnecting
+        once on a dropped socket. Returns a standard envelope (never raises)."""
         # Connect first; report a connection failure as an error envelope.
         if not await self._ensure():
             return {"status": "ERROR",
@@ -195,7 +211,7 @@ class TrueNASClient:
         # Run the call in a worker thread and wrap the result.
         try:
             try:
-                result = await asyncio.to_thread(self._call_sync, method, *args, **kwargs)
+                result = await asyncio.to_thread(fn, *args, **kwargs)
             # TrueNAS closes idle sockets between polls: reconnect once and retry.
             except Exception as e:  # noqa: BLE001
                 if not _is_disconnect(e):
@@ -204,12 +220,12 @@ class TrueNASClient:
                 await self.close()
                 if not await self._ensure():
                     raise RuntimeError(f"reconnect failed: {self._connect_error}") from e
-                result = await asyncio.to_thread(self._call_sync, method, *args, **kwargs)
-            return {"status": "SUCCESS", "data": result, "message": method}
+                result = await asyncio.to_thread(fn, *args, **kwargs)
+            return {"status": "SUCCESS", "data": result, "message": label}
         # The call failed: log it and return an error envelope.
         except Exception as e:  # noqa: BLE001
-            logger.error("truenas %s %s failed: %s", self.host, method, e)
-            return {"status": "ERROR", "message": f"{method}: {e}", "data": None}
+            logger.error("truenas %s %s failed: %s", self.host, label, e)
+            return {"status": "ERROR", "message": f"{label}: {e}", "data": None}
 
     async def _call_job(self, method: str, *args, **kwargs) -> Dict[str, Any]:
         """A long-running middleware job (scrub, replication): pass ``job=True``
@@ -269,47 +285,66 @@ class TrueNASClient:
         return await self._call("alert.list")
 
     async def capacity(self) -> Dict[str, Any]:
-        """Per-pool capacity series via reporting.get_data. Returns the most
-        recent used/avail datapoint per pool. reporting.get_data takes a node
-        name (a pool) + a list of metrics; we ask for ``used`` + ``avail``."""
-        # Get the pool list; pass along any error.
-        pools_env = await self.pools()
-        if pools_env["status"] != "SUCCESS":
-            return pools_env
-        # Read capacity for each named pool.
-        pools = pools_env["data"] if isinstance(pools_env.get("data"), list) else []
+        """Per-pool used/available bytes, read from each pool's root dataset."""
+        env = await self._call("pool.dataset.query", [],
+                               {"select": ["name", "pool", "used", "available"]})
+        if env["status"] != "SUCCESS":
+            return env
         out: List[Dict[str, Any]] = []
-        for p in pools:
-            name = p.get("name") if isinstance(p, dict) else None
-            if not name:
+        for ds in env["data"] or []:
+            # Root datasets (no "/") carry the whole pool's usage.
+            if not isinstance(ds, dict) or "/" in str(ds.get("name", "")):
                 continue
-            # Ask for the last hour of used and available space.
-            r = await self._call("reporting.get_data", [{
-                "node": name, "metrics": ["used", "avail"],
-                "aggregate": True, "start": "1h"}])
-            # Record a per-pool error and continue.
-            if r["status"] != "SUCCESS":
-                out.append({"pool": name, "used": None, "avail": None,
-                            "error": r.get("message", "")})
-                continue
-            # reporting.get_data returns a list of series dicts.
-            series = r["data"] if isinstance(r.get("data"), list) else []
-            # Take the latest value for each metric.
-            used = avail = None
-            for s in series:
-                if not isinstance(s, dict):
-                    continue
-                metric = s.get("metric")
-                vals = s.get("data") or s.get("aggregations") or []
-                last = vals[-1][1] if (vals and isinstance(vals[-1], list)
-                                       and len(vals[-1]) >= 2) else None
-                if metric == "used":
-                    used = last
-                elif metric == "avail":
-                    avail = last
-            # Add this pool's result.
-            out.append({"pool": name, "used": used, "avail": avail})
+            used = _parsed(ds.get("used"))
+            avail = _parsed(ds.get("available"))
+            total = (used or 0) + (avail or 0)
+            out.append({"pool": ds.get("name"), "used": used, "avail": avail,
+                        "pct_used": round(100 * used / total, 1) if used is not None and total else None})
         return {"status": "SUCCESS", "data": out, "message": f"{len(out)} pool(s)"}
+
+    def _realtime_sync(self, timeout: float = 10.0) -> Dict[str, Any]:
+        """One sample of the ``reporting.realtime`` event (what the TrueNAS
+        dashboard shows): disk IOPS/throughput, interface traffic, CPU, memory."""
+        sample: Dict[str, Any] = {}
+        got = threading.Event()
+
+        def _on_event(mtype, **msg):
+            fields = msg.get("fields")
+            if isinstance(fields, dict) and fields and not got.is_set():
+                sample.update(fields)
+                got.set()
+
+        sub_id = self._client.subscribe("reporting.realtime", _on_event)
+        try:
+            if not got.wait(timeout):
+                raise TimeoutError("no reporting.realtime sample")
+        finally:
+            try:
+                self._client.unsubscribe(sub_id)
+            except Exception:  # noqa: BLE001
+                pass
+        return sample
+
+    async def performance(self) -> Dict[str, Any]:
+        """Live disk IOPS + throughput and per-interface traffic."""
+        env = await self._run("reporting.realtime", self._realtime_sync)
+        if env["status"] != "SUCCESS":
+            return env
+        raw = env["data"] or {}
+        disks = raw.get("disks") if isinstance(raw.get("disks"), dict) else {}
+        ifaces = raw.get("interfaces") if isinstance(raw.get("interfaces"), dict) else {}
+        cpu = raw.get("cpu") if isinstance(raw.get("cpu"), dict) else {}
+        env["data"] = {
+            "disks": {k: disks.get(k) for k in
+                      ("read_ops", "write_ops", "read_bytes", "write_bytes", "busy")},
+            "interfaces": [
+                {"name": name, "link_state": v.get("link_state"), "speed": v.get("speed"),
+                 "received_bytes_rate": v.get("received_bytes_rate"),
+                 "sent_bytes_rate": v.get("sent_bytes_rate")}
+                for name, v in sorted(ifaces.items()) if isinstance(v, dict)],
+            "cpu_usage": (cpu.get("cpu") or {}).get("usage") if isinstance(cpu.get("cpu"), dict) else None,
+        }
+        return env
 
     # ── write methods (management, gated by the hub's write_scope) ──────────
     async def create_dataset(self, pool: str, name: str,

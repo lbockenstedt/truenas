@@ -334,6 +334,11 @@ class TruenasEngine:
         """Calculate storage capacity and allocation metrics across pools."""
         return await self._read("capacity", appliance_id, tenant, noun="pool(s)")
 
+    async def get_performance(self, appliance_id: str,
+                              tenant: Optional[str] = None) -> Dict[str, Any]:
+        """Live disk IOPS/throughput and interface traffic from the appliance."""
+        return await self._read("performance", appliance_id, tenant)
+
     # ── write methods (management) ──────────────────────────────────────────
     async def create_dataset(self, appliance_id: str, pool: str, name: str,
                              options: Optional[Dict[str, Any]] = None,
@@ -464,6 +469,7 @@ class TruenasEngine:
         alerts = await _safe(client.alerts(), "alerts", [])
         services = await _safe(client.services(), "services", [])
         capacity = await _safe(client.capacity(), "capacity", [])
+        performance = await _safe(client.performance(), "performance", {})
 
         # Group shares (iSCSI is not polled) and set the overall status.
         shares = {"smb": smb, "nfs": nfs, "iscsi": []}
@@ -488,6 +494,7 @@ class TruenasEngine:
                 "alerts": alerts,
                 "services": services,
                 "capacity": capacity,
+                "performance": performance,
             },
             "errors": errors,
             "message": (f"reachable={reachable}, "

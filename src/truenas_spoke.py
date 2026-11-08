@@ -203,7 +203,7 @@ class TruenasSpoke(BaseSpoke):
         ``TRUENAS_PROBE``, ``TRUENAS_GET_POOLS``, ``TRUENAS_GET_DATASETS``,
         ``TRUENAS_GET_DISKS``, ``TRUENAS_GET_SHARES`` (kind=smb|nfs|iscsi),
         ``TRUENAS_GET_ALERTS``, ``TRUENAS_GET_SERVICES``,
-        ``TRUENAS_GET_CAPACITY``, ``TRUENAS_POLL`` (system_info + pools +
+        ``TRUENAS_GET_CAPACITY``, ``TRUENAS_GET_PERFORMANCE``, ``TRUENAS_POLL`` (system_info + pools +
         datasets + disks + shares + alerts + services + capacity in one call,
         partial results on partial failure). Write/management (gated by the
         hub's write_scope): ``TRUENAS_CREATE_DATASET``, ``TRUENAS_DELETE_DATASET``,
@@ -307,6 +307,9 @@ class TruenasSpoke(BaseSpoke):
 
         if normalized_cmd == "TRUENAS_GET_CAPACITY":
             return await self.engine.get_capacity(appliance_id, tenant)
+
+        if normalized_cmd == "TRUENAS_GET_PERFORMANCE":
+            return await self.engine.get_performance(appliance_id, tenant)
 
         if normalized_cmd == "TRUENAS_POLL":
             return await self.engine.poll(appliance_id, tenant)
