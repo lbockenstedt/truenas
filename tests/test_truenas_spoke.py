@@ -473,3 +473,45 @@ def test_start_background_loops_is_idempotent(monkeypatch):
         assert spoke._bg_tasks == first and len(first) == 1
         first[0].cancel()
     _run(_go())
+
+
+# ── API-key login: owner username + SCRAM→PLAIN fallback on "auto" ───────────
+def _stub_auth_mech(monkeypatch):
+    import enum
+    mod = types.ModuleType("truenas_api_client.auth_api_key")
+
+    class APIKeyAuthMech(str, enum.Enum):
+        SCRAM = "SCRAM"
+        PLAIN = "PLAIN"
+    mod.APIKeyAuthMech = APIKeyAuthMech
+    monkeypatch.setitem(sys.modules, "truenas_api_client", types.ModuleType("truenas_api_client"))
+    monkeypatch.setitem(sys.modules, "truenas_api_client.auth_api_key", mod)
+
+
+class _LoginClient:
+    def __init__(self, scram_ok):
+        self.scram_ok = scram_ok
+        self.logins = []
+
+    def login_with_api_key(self, username, api_key, mech):
+        self.logins.append((username, api_key, mech.value))
+        if mech.value == "SCRAM" and not self.scram_ok:
+            raise ValueError("SCRAM not supported")
+
+
+def test_auto_login_falls_back_to_plain_with_username(monkeypatch):
+    import truenas_client
+    _stub_auth_mech(monkeypatch)
+    cl = truenas_client.TrueNASClient({"host": "h", "api_key": "k", "username": "svc"})
+    fake = _LoginClient(scram_ok=False)
+    cl._login(fake)
+    assert fake.logins == [("svc", "k", "SCRAM"), ("svc", "k", "PLAIN")]
+
+
+def test_plain_login_defaults_username(monkeypatch):
+    import truenas_client
+    _stub_auth_mech(monkeypatch)
+    cl = truenas_client.TrueNASClient({"host": "h", "api_key": "k", "auth_mechanism": "PLAIN"})
+    fake = _LoginClient(scram_ok=True)
+    cl._login(fake)
+    assert fake.logins == [("truenas_admin", "k", "PLAIN")]
