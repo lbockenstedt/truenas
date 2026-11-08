@@ -5,6 +5,7 @@ logs every command's outcome.
 """
 # Standard library imports.
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -162,11 +163,13 @@ class TruenasSpoke(BaseSpoke):
         if not isinstance(data, dict):
             return
         # Send the result to the hub.
-        await cp.send_to_hub("TRUENAS_POLL_RESULT",
-                               {"appliance_id": appliance_id, "data": data,
-                                "errors": res.get("errors") or []})
-        logger.info("truenas auto-poll %s -> pushed (status=%s)",
-                    appliance_id, res.get("status"))
+        # TrueNAS returns datetimes (boot time, alert times): make it JSON-safe.
+        payload = json.loads(json.dumps(
+            {"appliance_id": appliance_id, "data": data,
+             "errors": res.get("errors") or []}, default=str))
+        sent = await cp.send_to_hub("TRUENAS_POLL_RESULT", payload)
+        logger.info("truenas auto-poll %s -> %s (status=%s)", appliance_id,
+                    "pushed" if sent is not False else "push FAILED", res.get("status"))
 
     def start_background_loops(self) -> None:
         """Start the autonomous poll loop once (process-scoped, survives hub
