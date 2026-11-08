@@ -84,6 +84,8 @@ class TrueNASClient:
         # Connection settings, with an unknown auth mechanism treated as "auto".
         self.host = (cred or {}).get("host", "")
         self.api_key = (cred or {}).get("api_key", "")
+        # User the API key belongs to (required by TrueNAS 25.04+ key login).
+        self.username = (cred or {}).get("username") or "truenas_admin"
         self.verify_ssl = bool((cred or {}).get("verify_ssl", True))
         mech = (cred or {}).get("auth_mechanism", "auto")
         self.auth_mechanism = mech if mech in ("auto", "PLAIN", "SCRAM") else "auto"
@@ -109,32 +111,34 @@ class TrueNASClient:
         # persistent login keeps one session and avoids the 20-auth/60s rate
         # limit. login_with_api_key is the documented path.
         c = Client(self.uri, **kwargs)
-        # Log in with the API key.
+        # Log in with the API key (truenas_api_client needs the key's owner).
         try:
-            if self.auth_mechanism == "PLAIN":
-                try:
-                    from truenas_api_client import (  # type: ignore
-                        Authority as _A,
-                    )
-                    # PLAIN mechanism for Core/24.x legacy boxes.
-                    c.login_with_api_key(self.api_key,
-                                         auth_mechanism=_A.AuthMechanism.PLAIN)
-                # PLAIN not available: use the default login.
-                except Exception:
-                    c.login_with_api_key(self.api_key)
-            # Any other mechanism uses the default login.
-            else:
-                c.login_with_api_key(self.api_key)
-        # Login failed: try a harmless ping, then re-raise the error.
-        except Exception as e:  # noqa: BLE001
+            self._login(c)
+        # Login failed: close the socket and re-raise.
+        except Exception:
             try:
-                c.call("core.ping") if hasattr(c, "call") else None
-            except Exception:
+                c.close()
+            except Exception:  # noqa: BLE001
                 pass
             raise
         # Keep the connected client.
         self._client = c
         self._connected = True
+
+    def _login(self, c) -> None:
+        """API-key login. SCRAM/PLAIN are honoured as chosen; "auto" tries SCRAM
+        (TrueNAS 26+) and falls back to PLAIN (Core / 24.x / 25.x)."""
+        from truenas_api_client.auth_api_key import APIKeyAuthMech  # type: ignore
+        if self.auth_mechanism == "PLAIN":
+            c.login_with_api_key(self.username, self.api_key, APIKeyAuthMech.PLAIN)
+            return
+        try:
+            c.login_with_api_key(self.username, self.api_key, APIKeyAuthMech.SCRAM)
+        except Exception as e:  # noqa: BLE001
+            if self.auth_mechanism == "SCRAM":
+                raise
+            logger.info("truenas %s SCRAM login failed (%s); trying PLAIN", self.host, e)
+            c.login_with_api_key(self.username, self.api_key, APIKeyAuthMech.PLAIN)
 
     async def _ensure(self) -> bool:
         """Connect if not connected. Returns False + sets _connect_error on
@@ -145,8 +149,9 @@ class TrueNASClient:
         # Connect in a worker thread; on failure record the error and return False.
         try:
             await asyncio.to_thread(self._connect_sync)
-            logger.info("truenas connect %s ok (%s, auth=%s, verify_ssl=%s)",
-                        self.host, self.uri, self.auth_mechanism, self.verify_ssl)
+            logger.info("truenas connect %s ok (%s, user=%s, auth=%s, verify_ssl=%s)",
+                        self.host, self.uri, self.username, self.auth_mechanism,
+                        self.verify_ssl)
             return True
         except Exception as e:  # noqa: BLE001
             self._connect_error = str(e)

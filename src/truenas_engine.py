@@ -137,6 +137,7 @@ class TruenasEngine:
         api_key = (appliance or {}).get("api_key") or ""
         if host and api_key:
             return {"host": host, "api_key": api_key,
+                    "username": appliance.get("username") or "",
                     "verify_ssl": appliance.get("verify_ssl", True),
                     "auth_mechanism": appliance.get("auth_mechanism", "auto")}
         # Otherwise look up the named credential for the tenant.
