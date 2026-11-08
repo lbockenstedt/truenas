@@ -63,7 +63,7 @@ class _FakeClient:
         "system.info": {}, "pool.query": [], "pool.dataset.query": [],
         "disk.query": [], "sharing.smb.query": [], "sharing.nfs.query": [],
         "sharing.iscsi.query": [], "service.query": [], "alert.list": [],
-        "reporting.get_data": [],
+        "reporting.realtime": {},
     }
 
     def _record(self, method, payload=None):
@@ -99,7 +99,10 @@ class _FakeClient:
         return self._record("alert.list")
 
     async def capacity(self):
-        return self._record("reporting.get_data")
+        return self._record("pool.dataset.query")
+
+    async def performance(self):
+        return self._record("reporting.realtime")
 
     async def create_dataset(self, pool, name, options=None):
         return self._record("pool.dataset.create", {"pool": pool, "name": name,
@@ -234,7 +237,8 @@ def test_read_commands_emit_methods(monkeypatch):
         "TRUENAS_GET_DISKS": "disk.query",
         "TRUENAS_GET_ALERTS": "alert.list",
         "TRUENAS_GET_SERVICES": "service.query",
-        "TRUENAS_GET_CAPACITY": "reporting.get_data",
+        "TRUENAS_GET_CAPACITY": "pool.dataset.query",
+        "TRUENAS_GET_PERFORMANCE": "reporting.realtime",
     }
     for cmd, method in cmds.items():
         res = _run(spoke.handle_command(cmd, {"appliance_id": "a1"}))
@@ -566,3 +570,48 @@ def test_call_reconnects_after_dropped_socket():
     cl._connect_sync = reconnect
     env = asyncio.run(cl._call("pool.query"))
     assert env["status"] == "SUCCESS" and env["data"] == [{"name": "tank"}]
+
+
+def test_capacity_reads_root_datasets():
+    import asyncio
+    import truenas_client
+
+    class C:
+        def call(self, method, *a, **k):
+            return [{"name": "tank", "used": {"parsed": 25, "value": "25B"}, "available": {"parsed": 75}},
+                    {"name": "tank/child", "used": {"parsed": 5}, "available": {"parsed": 75}}]
+
+    cl = truenas_client.TrueNASClient({"host": "h", "api_key": "k"})
+    cl._client, cl._connected = C(), True
+    env = asyncio.run(cl.capacity())
+    assert env["data"] == [{"pool": "tank", "used": 25.0, "avail": 75.0, "pct_used": 25.0}]
+
+
+def test_performance_takes_one_realtime_sample():
+    import asyncio
+    import truenas_client
+
+    class C:
+        unsubscribed = None
+
+        def subscribe(self, name, cb):
+            assert name == "reporting.realtime"
+            cb("ADDED", fields={
+                "disks": {"read_ops": 10, "write_ops": 4, "read_bytes": 2048,
+                          "write_bytes": 1024, "busy": 3.5},
+                "interfaces": {"eno1": {"link_state": "LINK_STATE_UP", "speed": 10000,
+                                        "received_bytes_rate": 500, "sent_bytes_rate": 250}},
+                "cpu": {"cpu": {"usage": 12.5}}})
+            return "sub1"
+
+        def unsubscribe(self, sid):
+            C.unsubscribed = sid
+
+    cl = truenas_client.TrueNASClient({"host": "h", "api_key": "k"})
+    cl._client, cl._connected = C(), True
+    env = asyncio.run(cl.performance())
+    assert env["status"] == "SUCCESS"
+    assert env["data"]["disks"]["read_ops"] == 10
+    assert env["data"]["interfaces"][0]["name"] == "eno1"
+    assert env["data"]["cpu_usage"] == 12.5
+    assert C.unsubscribed == "sub1"
