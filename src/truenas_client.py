@@ -25,6 +25,7 @@ from __future__ import annotations
 
 # Standard library imports.
 import asyncio
+import errno
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -69,6 +70,14 @@ def _is_scale(system_info: Dict[str, Any]) -> bool:
     # SCALE reports virtualization or has "scale" in the product name.
     return bool(system_info.get("virtualization")) or \
         "scale" in str(system_info.get("product_name", "")).lower()
+
+
+def _is_disconnect(e: Exception) -> bool:
+    """True if the error means the WebSocket is gone (not a server-side call error)."""
+    return (getattr(e, "errno", None) == errno.ECONNABORTED
+            or isinstance(e, ConnectionError)
+            or "closure of remote connection" in str(e)
+            or "socket is already closed" in str(e).lower())
 
 
 class TrueNASClient:
@@ -185,7 +194,17 @@ class TrueNASClient:
                     "data": None}
         # Run the call in a worker thread and wrap the result.
         try:
-            result = await asyncio.to_thread(self._call_sync, method, *args, **kwargs)
+            try:
+                result = await asyncio.to_thread(self._call_sync, method, *args, **kwargs)
+            # TrueNAS closes idle sockets between polls: reconnect once and retry.
+            except Exception as e:  # noqa: BLE001
+                if not _is_disconnect(e):
+                    raise
+                logger.info("truenas %s connection dropped (%s); reconnecting", self.host, e)
+                await self.close()
+                if not await self._ensure():
+                    raise RuntimeError(f"reconnect failed: {self._connect_error}") from e
+                result = await asyncio.to_thread(self._call_sync, method, *args, **kwargs)
             return {"status": "SUCCESS", "data": result, "message": method}
         # The call failed: log it and return an error envelope.
         except Exception as e:  # noqa: BLE001
