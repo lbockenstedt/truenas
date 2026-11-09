@@ -476,8 +476,9 @@ def test_start_background_loops_is_idempotent(monkeypatch):
         spoke.start_background_loops()
         first = list(spoke._bg_tasks)
         spoke.start_background_loops()
-        assert spoke._bg_tasks == first and len(first) == 1
-        first[0].cancel()
+        assert spoke._bg_tasks == first and len(first) == 2
+        for t in first:
+            t.cancel()
     _run(_go())
 
 
@@ -615,3 +616,49 @@ def test_performance_takes_one_realtime_sample():
     assert env["data"]["interfaces"][0]["name"] == "eno1"
     assert env["data"]["cpu_usage"] == 12.5
     assert C.unsubscribed == "sub1"
+
+
+# ── 5-minute performance averages ────────────────────────────────────────────
+def test_perf_averager_closes_five_minute_buckets():
+    from perf_averager import PerfAverager
+    avg = PerfAverager()
+    avg.add("a1", {"write_ops": 100.0, "cpu": 10.0}, 600)
+    avg.add("a1", {"write_ops": 300.0}, 870)
+    avg.close_finished(899)          # bucket 600-899 still open
+    assert avg.pending == []
+    avg.close_finished(900)
+    assert avg.pending == [{"device_id": "a1", "ts": 600, "samples": 2,
+                            "metrics": {"write_ops": 200.0, "cpu": 10.0}}]
+
+
+def test_perf_tick_pushes_averages_and_keeps_them_when_hub_is_away(monkeypatch):
+    perf = {"disks": {"read_ops": 4, "write_ops": 20, "read_bytes": 1000,
+                      "write_bytes": 5000, "busy": 3.5},
+            "interfaces": [{"name": "eno1", "received_bytes_rate": 10, "sent_bytes_rate": 20},
+                           {"name": "eno2", "received_bytes_rate": 5, "sent_bytes_rate": None}],
+            "cpu_usage": 12.0}
+    spoke = _make_spoke([
+        {"id": "a1", "host": "10.0.0.5", "api_key": "k"},
+        {"id": "off", "host": "10.0.0.6", "api_key": "k", "poll_interval": 0}],
+        monkeypatch, canned={"reporting.realtime": perf})
+    sent = []
+
+    class _CP:
+        _hub_ws = None
+
+        async def send_to_hub(self, msg_type, data):
+            sent.append((msg_type, data))
+            return True
+
+    spoke.control_plane = _CP()
+    _run(spoke._perf_sample_tick(600))
+    _run(spoke._perf_sample_tick(900))      # bucket closed, hub away: kept
+    assert sent == [] and len(spoke.perf.pending) == 1
+    spoke.control_plane._hub_ws = object()
+    _run(spoke._perf_sample_tick(930))
+    assert spoke.perf.pending == []
+    msg_type, data = sent[0]
+    assert msg_type == "STORAGE_PERF_SAMPLE" and data["module"] == "truenas"
+    assert data["samples"] == [{"device_id": "a1", "ts": 600, "samples": 1, "metrics": {
+        "read_ops": 4.0, "write_ops": 20.0, "read_bytes": 1000.0, "write_bytes": 5000.0,
+        "busy": 3.5, "cpu": 12.0, "net_rx": 15.0, "net_tx": 20.0}}]
