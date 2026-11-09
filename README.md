@@ -52,7 +52,7 @@ The `truenas` module bridges the LM Hub control plane and multiple independent T
 - **SMB & NFS File Sharing:** Enumerate active file exports, provision new SMB shares with guest/ACL configurations, and manage NFS exports.
 - **Snapshot & Replication Visibility:** Inspect periodic snapshot schedules, query existing ZFS snapshots, and trigger manual snapshots on demand.
 - **Physical Disk Telemetry:** Polls disk health, serial numbers, drive models, temperature readings, rotation speeds, and enclosure slot positions.
-- **Performance Trending:** Every 30 seconds the spoke samples each appliance's live performance (disk IOPS, throughput and busy %, CPU, network) and averages it into 5-minute buckets (`src/perf_averager.py`). Each finished bucket is pushed to the hub as `STORAGE_PERF_SAMPLE` `{module, samples: [{device_id, ts, samples, metrics}]}`; the hub keeps 7 days and charts them on Storage → Performance. Buckets are held in spoke memory while the hub is unreachable (up to 7 days for 10 appliances; lost if the spoke restarts). Appliances with polling Off (`poll_interval: 0`) are not sampled. No Zabbix needed; other storage spokes can push the same message.
+- **Performance Trending:** Every 30 seconds the spoke samples each appliance's live performance (disk IOPS, throughput and busy %, CPU, network) and averages it into 5-minute buckets (`src/perf_averager.py`). The spoke keeps 7 days of these on disk in one JSON file (`src/perf_store.py`, `$LM_TRUENAS_DATA_DIR/perf.json`, default `/var/lib/lm-truenas`; standard library only). Each bucket is also pushed to the hub as `STORAGE_PERF_SAMPLE` `{module, samples: [{device_id, ts, samples, metrics}]}` so the default 7-day chart on Storage → Performance loads instantly; buckets the hub hasn't received stay marked unsent and are sent when it's back, even after a spoke restart. Any other range (1h, 6h, 24h, custom) is read from the spoke with `TRUENAS_GET_PERF_HISTORY`. Appliances with polling Off (`poll_interval: 0`) are not sampled. No Zabbix needed; other storage spokes can push the same message.
 - **Alerts & Services:** Captures active TrueNAS system alerts and queries system service run-states (SMB, NFS, SSH).
 
 ---
@@ -75,6 +75,7 @@ The spoke handles the following commands dispatched from the LM Hub via `src/tru
 | `TRUENAS_GET_SERVICES` | System Read | Queries operational status of TrueNAS background services via `service.query`. |
 | `TRUENAS_GET_CAPACITY` | Storage Read | Computes pool capacities, allocated space, and free space. |
 | `TRUENAS_GET_PERFORMANCE` | Performance | One live `reporting.realtime` sample: disk IOPS/throughput/busy, CPU, per-interface traffic. |
+| `TRUENAS_GET_PERF_HISTORY` | Performance | Stored 5-minute averages for `start`–`end` (epoch seconds; default the last 24h), up to 7 days back. |
 | `TRUENAS_POLL` | Aggregation | Executes complete poll: system info, pools, datasets, disks, shares, alerts, and capacity. |
 | `TRUENAS_CREATE_DATASET` | Management Write | Provisions a new ZFS dataset within a target pool (`pool.dataset.create`). |
 | `TRUENAS_DELETE_DATASET` | Management Write | Deletes an existing ZFS dataset (`pool.dataset.delete`). |

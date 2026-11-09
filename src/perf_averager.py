@@ -1,14 +1,12 @@
 """Turns frequent performance samples into 5-minute averages.
 
-The spoke feeds it a sample per appliance every ~30 seconds. When a 5-minute
-bucket ends, its averages move to ``pending`` until they are sent to the hub.
+The spoke feeds it a sample per appliance every ~30 seconds. ``close_finished``
+returns the averages of buckets that have ended (the spoke stores them).
 Generic on purpose: any storage spoke can feed it flat ``{metric: number}``.
 """
 from typing import Any, Dict, List
 
 BUCKET_S = 300
-# Finished buckets kept while the hub is unreachable (7 days of 10 appliances).
-MAX_PENDING = 7 * 24 * 12 * 10
 
 
 def truenas_metrics(perf: Any) -> Dict[str, float]:
@@ -31,13 +29,12 @@ def _num(v: Any):
 
 
 class PerfAverager:
-    """Per-device 5-minute averages, queued in ``pending`` until sent."""
+    """Per-device running sums for the current 5-minute bucket."""
 
-    def __init__(self, max_pending: int = MAX_PENDING):
+    def __init__(self):
         # device -> (bucket start, {metric: [sum, count]})
         self._open: Dict[str, tuple] = {}
-        self.pending: List[Dict[str, Any]] = []
-        self._max_pending = max_pending
+        self._closed: List[Dict[str, Any]] = []
 
     def add(self, device_id: str, metrics: Dict[str, float], now: float) -> None:
         """Add one sample to the device's current 5-minute bucket."""
@@ -51,20 +48,21 @@ class PerfAverager:
             s[0] += v
             s[1] += 1
 
-    def close_finished(self, now: float) -> None:
-        """Close buckets that have ended (also for devices that stopped answering)."""
+    def close_finished(self, now: float) -> List[Dict[str, Any]]:
+        """Averages of every bucket that has ended (also for devices that
+        stopped answering), as ``{device_id, ts, samples, metrics}``."""
         current = int(now // BUCKET_S) * BUCKET_S
         for device_id in [d for d, (b, _) in self._open.items() if b < current]:
             self._close(device_id)
+        closed, self._closed = self._closed, []
+        return closed
 
     def _close(self, device_id: str) -> None:
         bucket, sums = self._open.pop(device_id)
         if not sums:
             return
-        self.pending.append({
+        self._closed.append({
             "device_id": device_id, "ts": bucket,
             "samples": max(n for _, n in sums.values()),
             "metrics": {k: round(s / n, 2) for k, (s, n) in sums.items()},
         })
-        # Hub unreachable for days: drop the oldest.
-        del self.pending[:-self._max_pending]

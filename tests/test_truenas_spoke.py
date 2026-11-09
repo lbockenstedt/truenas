@@ -618,29 +618,65 @@ def test_performance_takes_one_realtime_sample():
     assert C.unsubscribed == "sub1"
 
 
+def test_performance_cpu_falls_back_to_core_average():
+    import asyncio
+    import truenas_client
+
+    class C:
+        def subscribe(self, name, cb):
+            cb("ADDED", fields={"cpu": {"cpu": {"usage": 0}, "cpu0": {"usage": 10},
+                                        "cpu1": {"usage": 30}}})
+            return "s"
+
+        def unsubscribe(self, sid):
+            pass
+
+    cl = truenas_client.TrueNASClient({"host": "h", "api_key": "k"})
+    cl._client, cl._connected = C(), True
+    assert asyncio.run(cl.performance())["data"]["cpu_usage"] == 20.0
+
+
 # ── 5-minute performance averages ────────────────────────────────────────────
 def test_perf_averager_closes_five_minute_buckets():
     from perf_averager import PerfAverager
     avg = PerfAverager()
     avg.add("a1", {"write_ops": 100.0, "cpu": 10.0}, 600)
     avg.add("a1", {"write_ops": 300.0}, 870)
-    avg.close_finished(899)          # bucket 600-899 still open
-    assert avg.pending == []
-    avg.close_finished(900)
-    assert avg.pending == [{"device_id": "a1", "ts": 600, "samples": 2,
-                            "metrics": {"write_ops": 200.0, "cpu": 10.0}}]
+    assert avg.close_finished(899) == []          # bucket 600-899 still open
+    assert avg.close_finished(900) == [{"device_id": "a1", "ts": 600, "samples": 2,
+                                        "metrics": {"write_ops": 200.0, "cpu": 10.0}}]
+    assert avg.close_finished(900) == []
 
 
-def test_perf_tick_pushes_averages_and_keeps_them_when_hub_is_away(monkeypatch):
+def test_perf_store_keeps_seven_days_and_unsent_rows_across_restart(tmp_path):
+    from perf_store import PerfStore
+    path = str(tmp_path / "perf.json")
+    now = 10 * 86400
+    store = PerfStore(path)
+    store.add([{"device_id": "a1", "ts": now - 8 * 86400, "samples": 1, "metrics": {"x": 1}},
+               {"device_id": "a1", "ts": now - 600, "samples": 10, "metrics": {"x": 2}},
+               {"device_id": "a1", "ts": now - 300, "samples": 10, "metrics": {"x": 3}}], now)
+    store.mark_sent([{"device_id": "a1", "ts": now - 600}])
+    again = PerfStore(path)
+    assert [r["ts"] for r in again.unsent()] == [now - 300]
+    assert again.history("a1", now - 900, now) == [
+        {"ts": now - 600, "samples": 10, "metrics": {"x": 2}},
+        {"ts": now - 300, "samples": 10, "metrics": {"x": 3}}]
+    assert again.history("a1", now - 400, now) == [{"ts": now - 300, "samples": 10, "metrics": {"x": 3}}]
+
+
+def test_perf_tick_stores_averages_and_sends_them_once_hub_is_back(monkeypatch, tmp_path):
+    from perf_store import PerfStore
     perf = {"disks": {"read_ops": 4, "write_ops": 20, "read_bytes": 1000,
                       "write_bytes": 5000, "busy": 3.5},
             "interfaces": [{"name": "eno1", "received_bytes_rate": 10, "sent_bytes_rate": 20},
                            {"name": "eno2", "received_bytes_rate": 5, "sent_bytes_rate": None}],
             "cpu_usage": 12.0}
     spoke = _make_spoke([
-        {"id": "a1", "host": "10.0.0.5", "api_key": "k"},
+        {"id": "a1", "host": "10.0.0.5", "api_key": "k", "tenant_id": "acme"},
         {"id": "off", "host": "10.0.0.6", "api_key": "k", "poll_interval": 0}],
         monkeypatch, canned={"reporting.realtime": perf})
+    spoke.perf_store = PerfStore(str(tmp_path / "perf.json"))
     sent = []
 
     class _CP:
@@ -651,14 +687,22 @@ def test_perf_tick_pushes_averages_and_keeps_them_when_hub_is_away(monkeypatch):
             return True
 
     spoke.control_plane = _CP()
-    _run(spoke._perf_sample_tick(600))
-    _run(spoke._perf_sample_tick(900))      # bucket closed, hub away: kept
-    assert sent == [] and len(spoke.perf.pending) == 1
+    now = int(__import__("time").time()) // 300 * 300
+    _run(spoke._perf_sample_tick(now))
+    _run(spoke._perf_sample_tick(now + 300))      # bucket closed, hub away: stored
+    assert sent == [] and len(spoke.perf_store.unsent()) == 1
     spoke.control_plane._hub_ws = object()
-    _run(spoke._perf_sample_tick(930))
-    assert spoke.perf.pending == []
+    _run(spoke._perf_sample_tick(now + 330))
+    assert spoke.perf_store.unsent() == []
     msg_type, data = sent[0]
     assert msg_type == "STORAGE_PERF_SAMPLE" and data["module"] == "truenas"
-    assert data["samples"] == [{"device_id": "a1", "ts": 600, "samples": 1, "metrics": {
-        "read_ops": 4.0, "write_ops": 20.0, "read_bytes": 1000.0, "write_bytes": 5000.0,
-        "busy": 3.5, "cpu": 12.0, "net_rx": 15.0, "net_tx": 20.0}}]
+    metrics = {"read_ops": 4.0, "write_ops": 20.0, "read_bytes": 1000.0, "write_bytes": 5000.0,
+               "busy": 3.5, "cpu": 12.0, "net_rx": 15.0, "net_tx": 20.0}
+    assert data["samples"] == [{"device_id": "a1", "ts": now, "samples": 1, "metrics": metrics}]
+    # Any range is read back from the spoke's store, tenant-checked.
+    res = _run(spoke.handle_command("TRUENAS_GET_PERF_HISTORY", {
+        "appliance_id": "a1", "tenant": "acme", "start": now - 3600, "end": now + 600}))
+    assert res["status"] == "SUCCESS" and res["data"] == [{"ts": now, "samples": 1, "metrics": metrics}]
+    res = _run(spoke.handle_command("TRUENAS_GET_PERF_HISTORY", {
+        "appliance_id": "a1", "tenant": "other", "start": now - 3600}))
+    assert res["status"] == "ERROR"
