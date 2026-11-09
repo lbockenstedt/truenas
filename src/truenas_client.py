@@ -334,6 +334,12 @@ class TrueNASClient:
         disks = raw.get("disks") if isinstance(raw.get("disks"), dict) else {}
         ifaces = raw.get("interfaces") if isinstance(raw.get("interfaces"), dict) else {}
         cpu = raw.get("cpu") if isinstance(raw.get("cpu"), dict) else {}
+        cpu_usage = (cpu.get("cpu") or {}).get("usage") if isinstance(cpu.get("cpu"), dict) else None
+        # The all-CPU figure reads 0 when TrueNAS lacks it; average the cores instead.
+        cores = [v.get("usage") for k, v in cpu.items() if k != "cpu" and isinstance(v, dict)
+                 and isinstance(v.get("usage"), (int, float))]
+        if not cpu_usage and cores:
+            cpu_usage = round(sum(cores) / len(cores), 2)
         env["data"] = {
             "disks": {k: disks.get(k) for k in
                       ("read_ops", "write_ops", "read_bytes", "write_bytes", "busy")},
@@ -342,7 +348,7 @@ class TrueNASClient:
                  "received_bytes_rate": v.get("received_bytes_rate"),
                  "sent_bytes_rate": v.get("sent_bytes_rate")}
                 for name, v in sorted(ifaces.items()) if isinstance(v, dict)],
-            "cpu_usage": (cpu.get("cpu") or {}).get("usage") if isinstance(cpu.get("cpu"), dict) else None,
+            "cpu_usage": cpu_usage,
         }
         return env
 
