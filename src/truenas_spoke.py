@@ -17,6 +17,7 @@ try:
 except ImportError:
     from base_spoke import BaseSpoke
 from truenas_engine import TruenasEngine
+from perf_averager import PerfAverager, truenas_metrics
 
 logger = logging.getLogger("TruenasSpoke")
 
@@ -51,6 +52,8 @@ class TruenasSpoke(BaseSpoke):
         # agent's role hook) and the background poll task.
         self.control_plane = None
         self._bg_tasks: List[asyncio.Task] = []
+        # 5-minute performance averages waiting to be sent to the hub.
+        self.perf = PerfAverager()
         # Finish base spoke setup.
         super().__init__(spoke_id, config)
 
@@ -171,14 +174,52 @@ class TruenasSpoke(BaseSpoke):
         logger.info("truenas auto-poll %s -> %s (status=%s)", appliance_id,
                     "pushed" if sent is not False else "push FAILED", res.get("status"))
 
+    # Performance is sampled this often and averaged into 5-minute buckets.
+    _PERF_SAMPLE_S = 30
+
+    async def _perf_sample_loop(self):
+        """Sample every appliance's performance and push 5-minute averages."""
+        while True:
+            await asyncio.sleep(self._PERF_SAMPLE_S)
+            try:
+                await self._perf_sample_tick(time.time())
+            except Exception as e:  # noqa: BLE001 - loop must never die
+                logger.debug("truenas perf sample tick error: %s", e)
+
+    async def _perf_sample_tick(self, now: float):
+        """Take one sample per appliance, close ended buckets, push them."""
+        # Appliances with polling turned Off (0) are left alone.
+        ids = [a["id"] for a in list(self.engine.appliances)
+               if a.get("id") and str(a.get("poll_interval")) != "0"]
+
+        async def _sample(aid):
+            # The client logs failures; successes stay quiet at this rate.
+            _, client = self.engine._client_for(aid)
+            return await client.performance() if client else None
+        results = await asyncio.gather(*(_sample(i) for i in ids), return_exceptions=True)
+        for aid, res in zip(ids, results):
+            if isinstance(res, dict) and res.get("status") == "SUCCESS":
+                self.perf.add(aid, truenas_metrics(res.get("data")), now)
+        self.perf.close_finished(now)
+        # Send everything finished; keep it for next time if the hub is away.
+        cp = self.control_plane
+        if not self.perf.pending or cp is None or getattr(cp, "_hub_ws", None) is None:
+            return
+        batch = list(self.perf.pending)
+        sent = await cp.send_to_hub("STORAGE_PERF_SAMPLE",
+                                    {"module": "truenas", "samples": batch})
+        if sent is not False:
+            del self.perf.pending[:len(batch)]
+
     def start_background_loops(self) -> None:
         """Start the autonomous poll loop once (process-scoped, survives hub
         reconnects). Called from the standalone ``TruenasControlPlane`` AND the
         generic agent's role hook, so a role-hosted truenas spoke polls too."""
         if self._bg_tasks:
             return
-        self._bg_tasks = [asyncio.create_task(self._truenas_poll_loop())]
-        logger.info("truenas background poll loop started")
+        self._bg_tasks = [asyncio.create_task(self._truenas_poll_loop()),
+                          asyncio.create_task(self._perf_sample_loop())]
+        logger.info("truenas background poll + performance sampling loops started")
 
     # ── Logging helper: mask sensitive fields in any command data ───────────
     @staticmethod
