@@ -18,6 +18,7 @@ except ImportError:
     from base_spoke import BaseSpoke
 from truenas_engine import TruenasEngine
 from perf_averager import PerfAverager, truenas_metrics
+from perf_store import PerfStore
 
 logger = logging.getLogger("TruenasSpoke")
 
@@ -52,8 +53,9 @@ class TruenasSpoke(BaseSpoke):
         # agent's role hook) and the background poll task.
         self.control_plane = None
         self._bg_tasks: List[asyncio.Task] = []
-        # 5-minute performance averages waiting to be sent to the hub.
+        # Performance: running 5-minute averages, kept 7 days on disk.
         self.perf = PerfAverager()
+        self.perf_store = PerfStore()
         # Finish base spoke setup.
         super().__init__(spoke_id, config)
 
@@ -200,16 +202,20 @@ class TruenasSpoke(BaseSpoke):
         for aid, res in zip(ids, results):
             if isinstance(res, dict) and res.get("status") == "SUCCESS":
                 self.perf.add(aid, truenas_metrics(res.get("data")), now)
-        self.perf.close_finished(now)
-        # Send everything finished; keep it for next time if the hub is away.
+        closed = self.perf.close_finished(now)
+        if closed:
+            await asyncio.to_thread(self.perf_store.add, closed, now)
+        # Send what the hub hasn't received; unsent rows wait on disk.
         cp = self.control_plane
-        if not self.perf.pending or cp is None or getattr(cp, "_hub_ws", None) is None:
+        if cp is None or getattr(cp, "_hub_ws", None) is None:
             return
-        batch = list(self.perf.pending)
+        batch = await asyncio.to_thread(self.perf_store.unsent)
+        if not batch:
+            return
         sent = await cp.send_to_hub("STORAGE_PERF_SAMPLE",
                                     {"module": "truenas", "samples": batch})
         if sent is not False:
-            del self.perf.pending[:len(batch)]
+            await asyncio.to_thread(self.perf_store.mark_sent, batch)
 
     def start_background_loops(self) -> None:
         """Start the autonomous poll loop once (process-scoped, survives hub
@@ -244,7 +250,8 @@ class TruenasSpoke(BaseSpoke):
         ``TRUENAS_PROBE``, ``TRUENAS_GET_POOLS``, ``TRUENAS_GET_DATASETS``,
         ``TRUENAS_GET_DISKS``, ``TRUENAS_GET_SHARES`` (kind=smb|nfs|iscsi),
         ``TRUENAS_GET_ALERTS``, ``TRUENAS_GET_SERVICES``,
-        ``TRUENAS_GET_CAPACITY``, ``TRUENAS_GET_PERFORMANCE``, ``TRUENAS_POLL`` (system_info + pools +
+        ``TRUENAS_GET_CAPACITY``, ``TRUENAS_GET_PERFORMANCE``,
+        ``TRUENAS_GET_PERF_HISTORY`` (stored 5-minute averages, start/end epoch), ``TRUENAS_POLL`` (system_info + pools +
         datasets + disks + shares + alerts + services + capacity in one call,
         partial results on partial failure). Write/management (gated by the
         hub's write_scope): ``TRUENAS_CREATE_DATASET``, ``TRUENAS_DELETE_DATASET``,
@@ -325,6 +332,19 @@ class TruenasSpoke(BaseSpoke):
         # Read commands.
         if normalized_cmd == "TRUENAS_PROBE":
             return await self.engine.probe(appliance_id, tenant)
+
+        if normalized_cmd == "TRUENAS_GET_PERF_HISTORY":
+            # Only appliances this caller's tenant may see.
+            if not self.engine._get_appliance(appliance_id, tenant):
+                return {"status": "ERROR", "message": f"Appliance {appliance_id} not found"}
+            try:
+                end = float(d.get("end") or time.time())
+                start = float(d.get("start") or end - 86400)
+            except (TypeError, ValueError):
+                return {"status": "ERROR", "message": "start/end must be epoch seconds"}
+            rows = await asyncio.to_thread(self.perf_store.history, appliance_id, start, end)
+            return {"status": "SUCCESS", "interval": 300, "data": rows,
+                    "message": f"{len(rows)} 5-minute average(s)"}
 
         if normalized_cmd == "TRUENAS_GET_POOLS":
             return await self.engine.get_pools(appliance_id, tenant)
