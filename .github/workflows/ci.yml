@@ -85,4 +85,4 @@ jobs:
       - name: Run tests
         env:
           PYTHONPATH: ${{ github.workspace }}/_lm:${{ github.workspace }}/_lm/core/src
-        run: pytest -q tests
+        run: pytest -x -q tests
