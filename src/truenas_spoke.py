@@ -18,7 +18,7 @@ except ImportError:
     from base_spoke import BaseSpoke
 from truenas_engine import TruenasEngine
 from perf_averager import PerfAverager, truenas_metrics
-from perf_store import PerfStore
+from truenas_perf_store import PerfStore
 
 logger = logging.getLogger("TruenasSpoke")
 

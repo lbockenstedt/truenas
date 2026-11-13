@@ -649,7 +649,7 @@ def test_perf_averager_closes_five_minute_buckets():
 
 
 def test_perf_store_keeps_seven_days_and_unsent_rows_across_restart(tmp_path):
-    from perf_store import PerfStore
+    from truenas_perf_store import PerfStore
     path = str(tmp_path / "perf.json")
     now = 10 * 86400
     store = PerfStore(path)
@@ -666,7 +666,7 @@ def test_perf_store_keeps_seven_days_and_unsent_rows_across_restart(tmp_path):
 
 
 def test_perf_tick_stores_averages_and_sends_them_once_hub_is_back(monkeypatch, tmp_path):
-    from perf_store import PerfStore
+    from truenas_perf_store import PerfStore
     perf = {"disks": {"read_ops": 4, "write_ops": 20, "read_bytes": 1000,
                       "write_bytes": 5000, "busy": 3.5},
             "interfaces": [{"name": "eno1", "received_bytes_rate": 10, "sent_bytes_rate": 20},
@@ -706,3 +706,16 @@ def test_perf_tick_stores_averages_and_sends_them_once_hub_is_back(monkeypatch, 
     res = _run(spoke.handle_command("TRUENAS_GET_PERF_HISTORY", {
         "appliance_id": "a1", "tenant": "other", "start": now - 3600}))
     assert res["status"] == "ERROR"
+
+
+def test_store_is_truenas_own_when_another_role_loaded_perf_store_first(monkeypatch):
+    """An agent hosting several roles imports them into one process, so a
+    flat module name another role loaded first (opnsense had a perf_store)
+    would be reused and truenas averages written to that role's file."""
+    import importlib
+    other = types.ModuleType("perf_store")
+    other.PerfStore = type("OtherRoleStore", (), {})
+    monkeypatch.setitem(sys.modules, "perf_store", other)
+    monkeypatch.delitem(sys.modules, "truenas_spoke", raising=False)
+    spoke_module = importlib.import_module("truenas_spoke")
+    assert spoke_module.PerfStore.__module__ == "truenas_perf_store"
